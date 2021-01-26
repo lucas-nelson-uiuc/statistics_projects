@@ -1,0 +1,256 @@
+---
+title: "Robust Regression: Fixing the LA Payroll Data Skew"
+author: "N.B., Lucas Nelson, R.S., W.Y., Z.Z."
+date: "12/15/2020"
+output:
+  pdf_document:
+    toc: yes
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center')
+```
+
+```{r, load-packages, include = FALSE}
+# load packages
+```
+
+***
+
+## Abstract
+
+In recent decades, statistical methods have rapidly evolved to account for and make purpose of the influence of outliers in linear regression models. Whereas least squares regression operates under a set of limiting assumptions, robust regression accounts for and operates under violations of said assumptions, namely normality and homoscedasticity. We explore the influence of outliers and performance of regression models as a function of 2013-2016 payroll data of Los Angeles public employees. Typical of United States wage data, public employees tend to gather heavily around the median, allowing their senior colleagues to share the few but far between positions at the upper-end of this distribution. Conditional on a data set with inherent outliers, we find that although not all robust regression methods are created equally, their performance is indicative of their computational power and statistical significance when compared to linear regression models, especially if a distribution does not follow elementary ideals.
+
+***
+
+## Introduction
+
+For  our  analysis,  we  will demonstrate how robust regression methods compare to standard linear regression models when tasked with detecting outliers and influential points as well as making predictions on a data set containing a non-negligible amount of influential points and/or outliers. In particular, we utilize the  _LA  County  Employee  Compensation  data  set _ provided  by  the  _Los Angeles  City Controller  Office_.  The  data  set  contains  285,008  observations  and  35  variables  related  to department titles, job titles, annual salaries, benefits, and additional payroll information. We derive a model that predicts total payments for each employee based on their payroll information. For simplicity, we took a random subset of $2800$ observations and conducted a series of data cleaning and data preparation methods, leaving us with 2460 observations and 16 columns. `Total.Payments` was selected as the response variable and the rest of the columns were set to be the feature variables.
+
+***
+
+## Data
+
+The data we use is LA payroll data ranging from 2013-2016. As previously stated, the original data set has 285,008 observations and 35 variables. For this analysis, we have chosen to subset the data so we are only working with observations made in 2016. Then we have randomly subset the data once more so we only have 2800 observations. After removing missing values, our final dataset has 2460 observations. We have also removed several variables from the data that are perfectly correlated or do add any explanatory significance to our models. `RowID` and `Job.Class.Link` are examples of variables that do not add explanatory power. `Q1.Payments`, `Q2.Payments`,`Q3.Payments`, and `Q4.Payments` are perfectly correlated with `Total.Payments` so we have removed these variables as they are represented in `Total.Payments`.
+
+Each row of the data represents a public worker who has some employment history in the city of Los Angeles. Each column in the data represents an attribute recorded of each public worker In the final cleaned dataset there are 4 categorical variables and 12 numeric variables.
+ 
+#### Categorical Variables
+
+The categorical variables track the employees job class, job position, their employment type (full-time, part-time, and per-event), and their benefits plan. The benefits plan variable is dependent on job class. These variables are important to our analysis because they largely constitute one's `Total.Payments` within each of level of these variables which allows us to determine the behavior of `Total.Payments`.
+
+#### Numeric Variables
+
+The numeric variables in this analysis are all some representation of a facet of the public worker's compensation ranging from hourly rate, bonus pay, overtime pay, payroll adjustment, and average benefit costs.
+
+#### Exploration
+
+We can see that full time employees accrue the highest `Total.Payments` and per-event employees obtain the lowest. It also appears that employees within the Fire level `Benefits.Plan` have the highest `Total.Payments`. The most common `Department.Title` is the LAPD, and Police officer II is the most common `Job.Class.Title`. There are 58 outliers in the cleaned data, all of which are public workers under full time employment. Of these outliers, the majority of these public workers belong to the Fire Department `Department.Title` with Engineer of the Fire Department being the `Job.Class.Title` with the most occurrences.
+
+***
+
+## Methods
+
+Robust regression provides greater merit over linear regression in distributions that satisfy two conditions: presence of outliers and violation of homoscedasticity. As a growing field in statistics, there is no one-size-fits-all model (nor should there be), so we utilized the robust models immediately provided in the `MASS` library's `rlm()` functionality: `psi.bisquare`, `psi.huber`, and `psi.hampel`. Communally, these methods operate under a set of loss functions, functions designed to assign weight to observations non-linearly (unlike their linear regression counterpart) in accordance to said observation's deviation from the sample mean. Tukey's method (bisquare) puts heavy emphasis on observations within $\pm$ 1 standard deviation centered around the mean. Huber's method is a convex optimization function with non-linearly decreasing preference for observations within $\pm$ 1 standard deviation and linearly decreasing preference otherwise. Hampel's method is a non-descending M-estimator providing similar weight as Tukey's method with less preference around the mean.
+
+We test the first of two conditions by means of our conveniently named "outlier analysis." In this section, we compared the performance of a linear model to that of a bisquare robust model, both with and without outliers. We measure the performance of the computed models by comparing the change in their diagnostic plots and the difference in an array errors.
+
+The second test we conduct is a comparison between the performance of a linear model and a series of robust regression models (Tukey, Huber, and Hampel). These models were built without the motivation to alter our cleaned data set (unlike the outlier analysis). Afterwards, we compared the final models using `regr.eval` in the `DMwR` package to measure an array of errors to determine explanatory power.
+
+***
+
+## Results
+
+In short, the outlier analysis and robust-linear comparison achieved the results we sought out for. Given the non-normality of our data, the regression models controlled for error terms much greater than the linear models, granting robust models with sufficient explanatory power should one make predictions with our results. We will spend the rest of this section talking about what measures we used to make such conclusions, and why we believe the observed results matched our hypothesized results.
+
+The outlier analysis was designed to highlight one important element of robust regression methods: robust regression operates better than linear regression under violation of non-normality. When measuring the validity of this hypothesis, we analyzed the diagnostic plots of the models we constructed. According to the plots of the simple linear models, the outliers do have an impact (some substantial) on the performance of the model. After we removed the outliers from the dataset, though the normality assumption still suspected, the homoscedasticity assumption is met.
+
+The robust-linear comparison analysis derived similar results but through a different metric. Rather than observing differences in diagnostic plots between the two models, we analyzed the distribution of residuals terms and, to associate a number with results, a series of regression evaluation statistics. The distribution of residual terms was an impressive observation, as all three robust models limited the spread of the residuals by at least ten-fold, although its realization is expected. Robust method favors outliers and influential points than linear methods, assigning weight to observations scaled  to their explanatory power. By highlighting an observation's explanatory power, this allows robust models to accrue exactly that, ultimately providing much less error than linear models. This result is observed in our regression evaluation table (Table 2), specifically the `mae` (mean absolute error) and `mse` (mean squared error). As observed, the Huber and Hampel models were more effective than the Tukey model, and much more effective than the linear model. We believe this has to do with how confined the Tukey model's weight algorithm is around the mean of a distribution, whereas the Huber and Hampel model allow for observations outside of $\pm$ 1 standard deviation to have more explanatory power than Tukey allows.
+
+***
+
+## Conclusion
+
+Statistics has been and will remain a dynamic field, never ceasing to challenge the methodologies of yesterday. One such aspect of statistics is robust regression, and as our study has demonstrated, robust regression challenges the applications of linear regression in applied statistics.
+
+Robust regression is one of the many topics in the field of statistics that is both a complement and a substitute for elementary and widely popular statistical methods. While our study's results emphasize the latter of the two relations to linear regression, we do not intend to thwart linear regression's merit and have thus concluded that the former relation must exist as well.
+
+Although robust regression methods display superiority over their linear regression counterpart, we found support for uncertainty in the applications of robust regression models. We hope that our report sheds light on robust regression's performance in a wage/payroll environment, a distribution that violates ideal assumptions under linear models, namely normality and homoscedasticity. 
+
+***
+
+## Contributions
+
+Nikolas did the data section of the report. He explained the data, as well as how we cleaned the data and which attributes we chose to remove. He performed preliminary data exploration by analyzing our response variable against the categorical attributes within the data.
+
+Lucas conducted the linear regression and robust regression comparison analysis, designed the PowerPoint presentation, and wrote the Abstract, Methods, Results, and Conclusion section of the report.
+
+Rohan assisted Nikolas in performing exploratory data analysis by plotting several visualizations in order to understand the data in more detail. He also gathered all of the code each member wrote and organized it into a single document, and also completed the Appendix section of the report.
+
+Weian did data cleaning and part of the outlier analysis, and wrote the introduction of the report.
+
+Zhiyuan did collinearity diagnosis on the dataset, part of the outliers analysis, and part of the comparison between linear regression and robust regression under the influence of outliers.
+
+***
+
+\newpage
+## Appendix
+
+**Data Dictionary**
+
+- `Department.Title`: Title of city department
+- `Job.Class.Title`: Title of job position
+- `Employment.Type`: Type of employment - full time, part time, or per event
+- `Hourly.or.Event.Rate`: Hourly earnings rate
+- `Projected.Annual.Salary`: Budgeted compensation amount
+- `Total.Payments`: Total earnings for the year
+- `Base.Pay`: Base compensation for hours worked
+- `Permanent.Bonus.Pay`: Payments attributable to permanent bonuses
+- `Longevity.Bonus.Pay`: Payments attributable to years of service
+- `Temporary.Bonus.Pay`: Payments attributable to temporary bonuses
+- `Lump.Sum.Pay`: Lump sum payouts for special purposes - retirement payouts, back pay, etc
+- `Overtime.Pay`: Payments attributable to hours worked beyond regular work schedule
+- `Other.Pay...Adjustments`: Payments based on other pay codes or adjustments that do not fall into another category
+- `Other.Pay..Payroll.Explorer`: Other Pay includes bonuses, adjustments, and lump sum payouts
+- `Average.Benefit.Cost`: The total average City contribution for the employee's health care, dental care and life insurance
+- `Benefits.Plan`: Type of benefit plan - City, DWP, Police, and Fire
+
+**Visualizations**
+
+```{r data cleaning, include=FALSE}
+library("readr")
+library("dplyr")
+library("ggplot2")
+library("ggcorrplot")
+library(MASS)
+library(DMwR)
+library(tidyverse)
+
+payroll = read_csv("https://raw.github-dev.cs.illinois.edu/lln2/DigBeta/master/payroll_cleaned.csv?token=AAACFHGZCYPISKSGQNE5VHS74KMNC")
+
+payroll$Department.Title = factor(payroll$Department.Title)
+payroll$Job.Class.Title = factor(payroll$Job.Class.Title)
+payroll$Employment.Type = factor(payroll$Employment.Type)
+payroll$Benefits.Plan = factor(payroll$Benefits.Plan)
+
+payroll = na.omit(payroll)
+payroll = payroll[!duplicated(payroll),]
+
+drops = c("X", "Row.ID", "Year", "Record.Number", "Job.Class.Link", "Payroll.Department", "MOU")
+payroll = subset(payroll, select = !names(payroll) %in% drops)
+```
+
+\begin{center}
+\textbf{Table 1}
+\end{center}
+
+```{R, echo=FALSE}
+mod_payroll <- lm(Total.Payments ~ ., data = payroll)
+
+RR_payroll <- payroll[sapply(payroll, class) != "factor"]
+
+#psi.bisquare
+RRmod_payroll_bsq <- rlm(Total.Payments ~ . -Other.Pay..Payroll.Explorer., data = RR_payroll, psi = psi.bisquare)
+
+#psi.huber
+RRmod_payroll_hbr <- rlm(Total.Payments ~ . -Other.Pay..Payroll.Explorer., data = RR_payroll, psi = psi.huber)
+
+#psi.hampel
+RRmod_payroll_hmp <- rlm(Total.Payments ~ . -Other.Pay..Payroll.Explorer., data = RR_payroll, psi = psi.hampel)
+
+regr_table = bind_rows(regr.eval(payroll$Total.Payments, mod_payroll$fitted.values),
+                       regr.eval(payroll$Total.Payments, RRmod_payroll_bsq$fitted.values),
+                       regr.eval(payroll$Total.Payments, RRmod_payroll_hbr$fitted.values),
+                       regr.eval(payroll$Total.Payments, RRmod_payroll_hmp$fitted.values)
+                       )
+
+regr_table <- as.matrix(regr_table)
+rownames(regr_table) = c("linear", "bisquare", "huber", "hampel")
+
+knitr::kable(x = regr_table, col.names = c("mae", "mse", "rmse", "mape"), row.names = TRUE,
+             digits = 10000)
+```
+
+\begin{center}
+\textbf{Figure 1}
+\end{center}
+
+```{r, echo=FALSE, fig.width=4, fig.height=3}
+# visualize Projected Annual Salary variable
+
+salary = payroll$Projected.Annual.Salary
+ggplot(payroll, aes(x=salary)) +
+  geom_histogram(aes(y =..density..),
+                  color = "black",
+                  fill = "white",
+                  bins=30) +
+   geom_density(col = "black",
+                alpha = 0.2,
+                fill = "green") +
+   ggtitle("Distribution of Projected Salary") +
+   geom_vline(xintercept=mean(salary), size=1, color="darkblue")
+```
+
+The distribution and quartiles of the Projected.Annual.Salary variable indicates a majority of the salaries is between \$63,000 and \$101,000, with the maximum salary in this data being \$319,986. As seen from the histogram above, the average salary is \$84,038.18 in the city of Los Angeles for public employees in 2016.
+
+\begin{center}
+\textbf{Figure 2}
+\end{center}
+
+
+```{r, echo=FALSE,fig.width=4, fig.height=3}
+# visualize salary differences between LAPD and LAFD
+
+police_and_fire = payroll %>%
+   filter(Department.Title %in% c("Police (LAPD", "Fire (LAFD"))
+ 
+ggplot(data=police_and_fire) +
+  geom_boxplot(aes(x=Department.Title, y=Projected.Annual.Salary))
+```
+
+Out of curiosity, we wanted to investigate if there were any large salary differences between the Los Angeles Police Department and the Los Angeles Fire Department. The boxplot above shows that although the Fire Department has a wider range of salaries, the Police Department has a greater average salary. An interesting observation from the boxplot is that the Police Department contains an observation that has a salary of zero. This may warrant additional examination to determine whether or not this is an entry error.
+
+\begin{center}
+\textbf{Figure 3}
+\end{center}
+
+```{r, echo=FALSE,fig.width=4, fig.height=3}
+# visualize distribution of LAPD Projected Annual Salaries
+
+police = payroll %>%
+   filter(Department.Title %in% c("Police (LAPD"))
+
+policeSalary = police$Projected.Annual.Salary
+ggplot(police, aes(x=policeSalary)) +
+  geom_histogram(aes(y =..density..),
+                  color = "black",
+                  fill = "white",
+                  bins=50) +
+   geom_density(col = "black",
+                alpha = 0.2,
+                fill = "purple") +
+   ggtitle("Distribution of LAPD Annual Salaries") +
+   geom_vline(xintercept=mean(policeSalary), size=1, color="red")
+```
+
+The histogram above is another perspective of the LAPD Projected Annual Salary. The average LAPD salary in this data set is \$96,528.94. This number seems rather high, which leads us to believe this data set is skewed towards senior officers and detectives relative to the typical entry-level police officer.
+
+\begin{center}
+\textbf{Table 2}
+\end{center}
+
+```{r, echo=FALSE,fig.width=6, fig.height=4}
+numeric_data = payroll %>% dplyr::select (-Department.Title, -Job.Class.Title, -Employment.Type, -Benefits.Plan)
+
+ggcorrplot(
+  round(cor(numeric_data), 1),
+  hc.order = TRUE,
+  type = "lower",
+  outline.color = "white",
+  ggtheme = ggplot2::theme_gray,
+  colors = c("#8a2be2", "white", "#00bfff"),
+  lab = TRUE
+)
+```
+
+The visualization above is a heat map of the correlations between the various variables. There are many variables that have zero correlation with one another, and only one pair of variables that have a slight negative correlation.

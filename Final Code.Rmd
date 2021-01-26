@@ -1,0 +1,339 @@
+---
+title: "Project Code"
+author: "N.B., Lucas Nelson, R.S., W.Y., Z.Z."
+output:
+  pdf_document:
+    toc: yes
+---
+
+***
+
+**Note**: This document contains the code we wrote for our Robust Regression project. 
+
+## Data Preparation
+
+Load the relevant libraries
+
+```{r}
+library("dplyr")
+library("stringr")
+library("readr")
+library("ggplot2")
+library("ggcorrplot")
+```
+
+Read in the data and convert variables to factors
+
+```{r}
+payroll = read_csv("https://raw.github-dev.cs.illinois.edu/lln2/DigBeta/master/payroll_cleaned.csv?token=AAACFHGZCYPISKSGQNE5VHS74KMNC")
+
+payroll$Department.Title = factor(payroll$Department.Title)
+payroll$Job.Class.Title = factor(payroll$Job.Class.Title)
+payroll$Employment.Type = factor(payroll$Employment.Type)
+payroll$Benefits.Plan = factor(payroll$Benefits.Plan)
+```
+
+Perform data cleaning steps
+
+```{r}
+# function to detect percentage of NA's per column
+na_proportion = function(data) {
+  mean(is.na(data))
+}
+
+# view percentage of NA's
+sapply(payroll, na_proportion)
+
+# remove missing values and duplicates
+payroll = na.omit(payroll)
+payroll = payroll[!duplicated(payroll),]
+
+# columns indicating ID, time and unhelpful information are dropped
+drops = c("X", "Row.ID", "Year", "Record.Number", "Job.Class.Link", "Payroll.Department", "MOU")
+payroll = subset(payroll, select = !names(payroll) %in% drops)
+
+# check column type
+sapply(payroll, class)
+
+par(mfrow = c(2,4))
+```
+
+Plot the histograms of the two data frames. Without transformations, both plots display a right tail. With a square root transformation, the distributions are approximately normal.
+
+```{r}
+hist(payroll$Total.Payments, xlab="Total Payments", main="Original Distribution")
+abline(v = mean(payroll$Total.Payments), col = "blue")
+
+hist((payroll$Total.Payments)^0.5, xlab="Total Payments", main="Sqrt Distribution")
+abline(v = mean((payroll$Total.Payments)^0.5), col = "blue")
+```
+
+Since the plots had a right tail, there will most likely be outliers on the upper-portion of the distributions. The box-plots support this conclusion.
+
+```{r}
+par(mfrow = c(2,4))
+
+boxplot(payroll$Total.Payments)
+boxplot(payroll$Projected.Annual.Salary)
+boxplot(payroll$Hourly.or.Event.Rate)
+```
+
+Check the collinearity between variables
+
+```{r}
+numeric_data = payroll %>% dplyr::select (-Department.Title, -Job.Class.Title, -Employment.Type, -Benefits.Plan)
+
+ggcorrplot(
+  round(cor(numeric_data), 1),
+  hc.order = TRUE,
+  type = "lower",
+  outline.color = "white",
+  ggtheme = ggplot2::theme_gray,
+  colors = c("#8a2be2", "white", "#00bfff"),
+  lab = TRUE
+)
+```
+
+***
+
+## Outlier Analysis
+
+Fit a linear model 
+
+```{r}
+payroll_lin = lm(Total.Payments ~ ., data = payroll)
+```
+
+Run diagnostics
+
+```{r}
+plot(payroll_lin) # normality and homoscedasticity assumptions seem to be violated
+```
+
+Perform outlier detection
+
+```{r}
+plot(rstandard(payroll_lin), type = "h") # seem to be outliers in obs. 1-500
+```
+
+Perform Mean Shift Test
+
+```{r}
+# use Bonferroni-adjusted critical value
+critical = qt(0.05 / (2*nobs(payroll_lin)), df = df.residual(payroll_lin) - 1, lower = FALSE)
+
+# store the outliers
+outliers = which(abs(rstudent(payroll_lin)) > critical)
+```
+
+Compute the high leverage points
+
+```{r}
+leverage = which(hatvalues(payroll_lin) >=1)
+```
+
+Compute the influence of each observation
+
+```{r}
+# observations with cook's distance >= 4/n will be considered influential
+influential = which(cooks.distance(payroll_lin) >= (4/nobs(payroll_lin)))
+```
+
+Fit a model without outliers
+
+```{r}
+payroll_no_outlier = payroll[-outliers, ]
+payroll_lin_1 = lm(Total.Payments ~ ., payroll_no_outlier)
+
+# model diagnostics
+plot(payroll_lin_1)
+```
+
+Compute the high leverage points of the new model
+
+```{r}
+leverage_1 = which(hatvalues(payroll_lin_1) >=1)
+```
+
+Compare high leverage points for the two models
+
+```{r}
+setdiff(leverage, leverage_1)
+```
+
+Compute influential points of new model
+
+```{r}
+influential_1 = which(cooks.distance(payroll_lin_1) >= (4/nobs(payroll_lin_1)))
+
+# compare the differences
+setdiff(influential, influential_1)
+```
+
+***
+
+## Linear-Robust Model Analysis
+
+After checking the initial and modified condition of the data frames, we can start our composition of the linear regression model.
+
+```{r}
+mod_payroll = lm(Total.Payments ~ ., data = payroll)
+```
+
+The diagnosis plots show that the distributions do not violate normality. However, homoscedasticity is not apparent, supporting our previous point that outliers exist in the data frames.
+
+```{r}
+par(mfrow = c(2,4))
+
+plot(mod_payroll)
+
+plot(fitted(mod_payroll))
+```
+
+Now we can build our robust regression models.
+
+```{r}
+library(MASS)
+par(mfrow=c(2,4))
+
+RR_payroll <- payroll[sapply(payroll, class) != "factor"]
+
+#psi.bisquare
+RRmod_payroll_bsq <- rlm(Total.Payments ~ . -Other.Pay..Payroll.Explorer., data = RR_payroll, psi = psi.bisquare)
+plot(resid(RRmod_payroll_bsq), type="l")
+plot(fitted(RRmod_payroll_bsq))
+
+#psi.huber
+RRmod_payroll_hbr <- rlm(Total.Payments ~ . -Other.Pay..Payroll.Explorer., data = RR_payroll, psi = psi.huber)
+plot(resid(RRmod_payroll_hbr), type="l")
+plot(fitted(RRmod_payroll_hbr))
+
+#psi.hampel
+RRmod_payroll_hmp <- rlm(Total.Payments ~ . -Other.Pay..Payroll.Explorer., data = RR_payroll, psi = psi.hampel)
+plot(resid(RRmod_payroll_hmp), type="l")
+plot(fitted(RRmod_payroll_hmp))
+
+plot(resid(mod_payroll), type="l")
+```
+
+Compare lm and rlm
+
+```{r}
+library(DMwR)
+
+regr.eval(payroll$Total.Payments, mod_payroll$fitted.values)
+regr.eval(payroll$Total.Payments, RRmod_payroll_bsq$fitted.values)
+regr.eval(payroll$Total.Payments, RRmod_payroll_hbr$fitted.values)
+regr.eval(payroll$Total.Payments, RRmod_payroll_hmp$fitted.values)
+```
+
+Tabulate results
+
+```{r}
+library(tidyverse)
+
+regr_table = bind_rows(regr.eval(payroll$Total.Payments, mod_payroll$fitted.values),
+                       regr.eval(payroll$Total.Payments, RRmod_payroll_bsq$fitted.values),
+                       regr.eval(payroll$Total.Payments, RRmod_payroll_hbr$fitted.values),
+                       regr.eval(payroll$Total.Payments, RRmod_payroll_hmp$fitted.values)
+                       )
+
+regr_table <- as.matrix(regr_table)
+rownames(regr_table) = c("linear", "bisquare", "huber", "hampel")
+
+knitr::kable(x = regr_table, col.names = c("mae", "mse", "rmse", "mape"), row.names = TRUE,
+             digits = 10000)
+```
+
+
+```{r}
+lin_resid <- sort(abs(resid(mod_payroll, decreasing=FALSE)))
+max(lin_resid)
+bsq_resid <- sort(abs(resid(RRmod_payroll_bsq, decreasing=FALSE)))
+max(bsq_resid)
+hbr_resid <- sort(abs(resid(RRmod_payroll_hbr, decreasing=FALSE)))
+max(hbr_resid)
+hmp_resid <- sort(abs(resid(RRmod_payroll_hmp, decreasing=FALSE)))
+max(hmp_resid)
+```
+
+***
+
+## Visualizations
+
+```{r}
+# visualize Projected Annual Salary variable
+
+salary = payroll$Projected.Annual.Salary
+ggplot(payroll, aes(x=salary)) +
+  geom_histogram(aes(y =..density..),
+                  color = "black",
+                  fill = "white",
+                  bins=30) +
+   geom_density(col = "black",
+                alpha = 0.2,
+                fill = "green") +
+   ggtitle("Distribution of Projected Salary") +
+   geom_vline(xintercept=mean(salary), size=1, color="darkblue")
+
+summary(salary)
+```
+
+```{r}
+# visualize salary differences between LAPD and LAFD
+
+police_and_fire = payroll %>%
+   filter(Department.Title %in% c("Police (LAPD", "Fire (LAFD"))
+ 
+ggplot(data=police_and_fire) +
+  geom_boxplot(aes(x=Department.Title, y=Projected.Annual.Salary))
+```
+
+
+```{r}
+# visualize distribution of LAPD Projected Annual Salaries
+
+police = payroll %>%
+   filter(Department.Title %in% c("Police (LAPD"))
+
+policeSalary = police$Projected.Annual.Salary
+ggplot(police, aes(x=policeSalary)) +
+  geom_histogram(aes(y =..density..),
+                  color = "black",
+                  fill = "white",
+                  bins=50) +
+   geom_density(col = "black",
+                alpha = 0.2,
+                fill = "purple") +
+   ggtitle("Distribution of LAPD Annual Salaries") +
+   geom_vline(xintercept=mean(policeSalary), size=1, color="red")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
