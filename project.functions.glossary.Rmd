@@ -1,0 +1,233 @@
+---
+title: "project.functions.glossary"
+output: pdf_document
+---
+
+```{r}
+library(tidyverse)
+library(caret)
+library(ranger)
+library(FNN)
+library(gt)
+library(ggrepel)
+library(gridExtra)
+library(reshape2)
+```
+
+# knn.fit
+
+```{r}
+knn.fit = function(sub.df, response, model.name) {
+  
+  #' Simulation study of K-Nearest Neighbors using
+  #' FNN::knn.cv() function
+  #'
+  #' @param sub.df
+  #'    data.frame containing subset of brca data
+  #'
+  #' @param response
+  #'    response variable from brca data
+  #'
+  #' @param model.name
+  #'    name of random forest model
+  
+  # set seed for consistent results and split sub.df
+  # such that X is features, y is response
+  set.seed(432)
+  X = sub.df[, -ncol(sub.df)]
+  y = sub.df[, response]
+  
+  # collection
+  cl.err = matrix(NA, nrow=length(seq(1,98)), ncol=5)
+  
+  for (i in seq(1,98)) {
+    # fit knn model using faster knn.cv (FNN package)
+    fnn.fit = FNN::knn.cv(X, y, k=i*2+1)
+    cl.err[i, 1] = i*2+1
+    cl.err[i, 2] = round((1 - mean(fnn.fit == y)) * 100, 2)
+    
+    # confusion matrix of fnn.fit and observed
+    conf.mat = table(fnn.fit, y)
+    cl.err[i, 3] = round(conf.mat[1,1] / sum(conf.mat[,1]) * 100, 2)
+    cl.err[i, 4] = round(conf.mat[2,2] / sum(conf.mat[,2]) * 100, 2)
+    cl.err[i, 5] = model.name
+  }
+  
+  # return data.frame containing classification metrics
+  # per k value computed above
+  return(data.frame(k = as.double(cl.err[,1]),
+                    Class.Error=as.double(cl.err[,2]),
+                    Sensitivity=as.double(cl.err[,3]),
+                    Specificity=as.double(cl.err[,4]),
+                    model=cl.err[,5]))
+  
+}
+```
+
+
+# ranger.fit
+
+```{r}
+ranger.fit = function(sub.df, response, model.name) {
+  
+  #' Fit data sets using repeated cross-validation
+  #' and return data.frame with accuracy-related
+  #' metrics for gt table printing
+  #'
+  #' @param sub.df
+  #'    data.frame containing subset of brca data
+  #'
+  #' @param response
+  #'    response variable from brca data
+  #'
+  #' @param model.name
+  #'    name of random forest model
+  
+  # set seed for consistent results and split sub.df
+  # such that X is features, y is response
+  set.seed(432)
+  X = sub.df[, -ncol(sub.df)]
+  y = sub.df[, response]
+  
+  # fit random forest using ranger method, cross-validation,
+  # and a tuning grid to test an array of possible parameters
+  rand.frst = train(y ~ ., method='ranger', data=data.frame(X, y),
+                    num.trees=1000, respect.unordered.factors='partition',
+                    trControl=trainControl(method='repeatedcv',
+                                           number=10, repeats=3),
+                    tuneGrid=expand.grid(mtry=seq(3,9,2),
+                                         min.node.size=c(1,5,10,15),
+                                         splitrule='gini'))
+  
+  # subset best three models with mtry, min.node.size,
+  # and Accuracy columns leftover in order by Accuracy
+  b3.mods = rand.frst$results %>%
+    select(-c(splitrule, Kappa, AccuracySD, KappaSD)) %>%
+    arrange(desc(Accuracy)) %>%
+    head(1)
+  
+  # create placeholders for sensitivity and specificity;
+  # metrics are gathered per iteration of the for loop,
+  # where each of the top three models' parameters are
+  # passed into the ranger function
+  sensitivity = 0
+  specificity = 0
+
+  for (i in 1:nrow(b3.mods)) {
+    rng.fit = ranger(y ~ ., data=data.frame(X, y),
+                     num.trees = 1000, splitrule='gini',
+                     respect.unordered.factors='partition',
+                     mtry=b3.mods[i, 'mtry'],
+                     min.node.size=b3.mods[i, 'min.node.size'],
+                     importance='impurity', local.importance=TRUE)
+    
+    # gather predicted values and generated confusion matrix
+    preds = predict(rng.fit, X)
+    cls = table(preds$predictions, y)
+    
+    # use confusion matrix to compute sensitivity, specificity
+    sensitivity[i] = cls[2,2] / sum(cls[,2])
+    specificity[i] = cls[1,1] / sum(cls[,1])
+  }
+  
+  # integrate sensitivity, specificity as columns in b3.mods
+  b3.mods$Sensitivity = sensitivity
+  b3.mods$Specificity = specificity
+  b3.mods = b3.mods %>%
+    mutate(Class.Error = round((1 - Accuracy) * 100, 2),
+           Sensitivity = round(sensitivity * 100, 2),
+           Specificity = round(specificity * 100, 2),
+           model=model.name) %>%
+    select(-Accuracy)
+  
+  # return data.frame of best three models
+  return(b3.mods)
+  
+}
+```
+
+# create.cor.gg
+
+```{r}
+create.cor.gg = function(subgroup, response) {
+  
+  #' Generate data.frame with aggregate and correlation metrics
+  #' for plotting correlation matrix
+  #'
+  #' @param table     data.frame of predictor variable subgroup
+  #'                    (e.g. gene.expressions, protein.levels)
+  #' @param response name of response variable (e.g. PR.Status)
+  #' @return           data.frame with subgroup's aggregate and
+  #'                                        correlation metrics
+  
+  # if necessary, change factors to double for arithmetic properties
+  subgroup.mutate = subgroup %>% mutate_if(is.factor, as.double)
+  # bind table with PR.Status along columns
+  tbl.pr = cbind(subgroup.mutate,
+                 brca[, response])
+  # update name of PR.Status in tbl.pr
+  names(tbl.pr)[ncol(tbl.pr)] = 'response'
+  # filter out missing values in tbl.pr and code +,- labels to 1,0
+  pr.fill = tbl.pr[tbl.pr$response != 'Missing', ]
+  pr.fill$response = ifelse(pr.fill$response == 'Positive', 1, 0)
+  
+  # select response column from correlation data.frame of all variables
+  cor.df = data.frame(cor(pr.fill)[, ncol(subgroup.mutate) + 1])
+  # update name of cor.df column
+  names(cor.df) = 'correlation'
+  
+  # remove PR.Status from correlation data.frame (perfect correlation
+  # with itself) and create new columns for mean value per column
+  # (mean_val), sign of correlation (cor_sign), sign of mean (mean_sign)
+  # and genetic sequence (sequence)
+  cor.df = cor.df %>%
+    filter(!row_number() == nrow(cor.df)) %>%
+    mutate(mean_val = colMeans(subgroup.mutate),
+           cor_sign = as.factor(ifelse(correlation >= 0, 'positive', 'negative')),
+           mean_sign = as.factor(ifelse(mean_val >= mean(colMeans(subgroup.mutate)),
+                                        'above average', 'below average')),
+           sequence = na.omit(str_extract(rownames(cor.df), '_([a-zA-z0-9]+)')))
+  
+  # return mutated data.frame
+  return(cor.df)
+  
+}
+```
+
+
+# plot.cor.gg
+
+```{r}
+plot.cor.gg = function(cor.df) {
+    
+  #' Output grid of correlation plots returned by create.cor.gg
+  #' function
+  #'
+  #' @param cor.df data.frame of correlation metrics from
+  #'                               create.cor.gg function
+  #' @return       ggplot2 object, scatterplot of mean value
+  #'                                versus correlation score
+  
+  cor.gg = ggplot(data=cor.df,
+                  mapping=aes(x=mean_val, y=correlation, colour=correlation)) +
+    # scatterplot, x=mean value of column, y=correlation with response variable
+    geom_point() +
+    # label points of greatest positive/negative correlation
+    geom_text_repel(aes(label=ifelse((correlation == max(correlation)), sequence,
+                              ifelse(correlation == min(correlation), sequence, "")))) +
+    # use gradient color scheme for correlation scores
+    scale_colour_gradient2() +
+    # label the graph
+    labs(x = 'Mean Value',
+         y = 'Correlation',
+         colour = 'Correlation') +
+    # apply black-and-white theme
+    theme_bw() +
+    # bold and center-align title
+    theme(plot.title = element_text(face='bold', hjust=0.5))
+  
+  # return ggplot2 object
+  return(cor.gg)
+}
+```
+

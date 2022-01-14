@@ -1,0 +1,185 @@
+---
+title: "model.PR.Status"
+author: "Lucas Nelson (lln2)"
+date: "12/7/2021"
+output: pdf_document
+---
+
+\par\noindent\rule{\textwidth}{0.4pt}
+
+### Libraries used in file
+
+```{r warning=FALSE, message=FALSE}
+# location of `project.functions.glossary.R` file
+f.root = '~/Desktop/University of Illinois/Senior/FA21/STAT 432/_FinalProject/'
+# loading in data, functions from `project.functions.glossary.R`
+source(paste0(f.root, 'project.functions.glossary.R'))
+```
+
+### Data processing required for file
+
+\par\noindent\rule{\textwidth}{0.4pt}
+
+In '*Comprehensive molecular portraits of human breast tumours*' (The Cancer Genome Atlas Network, 2012), the mention an array of "genes previously implicated in breast cancer", some of which include PIK3CA, AKT1, TP53, and others.
+
+The subset of covariates is given here, where the group of "genes previously implicated in breast cancer" are gathered in `id.rs`, the group of "significantly mutated genes" are gathered in `id.mu`, and the `data.frame`s are combined in `id.pr`.
+
+The following code chunk filters the covariates to only contain the genes specified by [insert author name] in [insert paper name]. Afterwards, we design three models:
+  - `rf.id.pr`: random forest model using full data set, `PR.Status` as response
+  - `rf.id.rs`: random forest model using "genes previously implicated in breast cancer", `PR.Status` as response
+  - `rf.id.mu`: random forest model using "significantly mutated genes", `PR.Status` as response
+
+Making use of the `ranger` package for random forest functionality and the `caret` package for cross-validation functionality, we test an array of parameter values across our three datasets. Comparing these models, we find that the full model (`rf.id.pr`) is the most accurate model, with designated parameters `mtry = 3` and `min.node.size = 15`.
+
+```{r warning=FALSE, message=FALSE}
+knn.full = knn.fit(id.pr, 'PR.Status', 'Combined Subsets')
+knn.gene = knn.fit(id.rs, 'PR.Status', 'Implicated Genes')
+knn.mute = knn.fit(id.mu, 'PR.Status', 'Significant. Mutations')
+
+b1.full = knn.full %>% arrange(Class.Error) %>% head(1)
+b1.gene = knn.gene %>% arrange(Class.Error) %>% head(1)
+b1.mute = knn.mute %>% arrange(Class.Error) %>% head(1)
+```
+
+```{r}
+ff.df = melt(as.tibble(rbind(b1.full, b1.gene, b1.mute)),
+             id.vars=c('model', 'k'))
+gg.df = melt(rbind(knn.full, knn.gene, knn.mute),
+             id.vars=c('model', 'k'))
+
+f = class.metrics.bar(ff.df)
+g = class.metrics.line(gg.df)
+grid.arrange(f, g, nrow=2)
+```
+
+Random forest time.
+
+```{r}
+rf.full = ranger.fit(id.pr, 'PR.Status', 'Combined Subsets')
+rf.gene = ranger.fit(id.rs, 'PR.Status', 'Implicated Genes')
+rf.mute = ranger.fit(id.mu, 'PR.Status', 'Sgfnt. Mutations')
+
+b1.rfull = rf.full %>% arrange(Class.Error) %>% head(1)
+b1.rfgen = rf.gene %>% arrange(Class.Error) %>% head(1)
+b1.rfmut = rf.mute %>% arrange(Class.Error) %>% head(1)
+```
+
+After fitting the models, we can fit a final model with the best forming parameter combination given to us from the `rf.id.pr` model, where `num.trees = 1000`, `mtry = 3`, `min.node.size = 15`, and `splitrule = gini`.
+
+From here, we would like to obtain the importance of each feature within the model's decision making path, i.e., for each variable, how much does it help the model correctly classify the response (here, `PR.Status`).
+
+The result of this chunk is a `ggplot2` figure that emphasizes a point of analysis in the [insert name of background data set paper]: *"GATA3 are key regulators of ER activity (Liu et  al., 2014), suggesting IDC and ILC may preferentially rely on different mechanisms to mediate the ER transcriptional program."*
+
+```{r}
+# fit model using best reported parameters
+# with ranger rf method; gather importance
+# of each variable using `importance` and
+# local.importance parameters
+b1.rfull = rf.full %>% arrange(Class.Error) %>% head(1)
+X = id.pr[, -ncol(id.pr)]
+y = id.pr[, 'PR.Status']
+set.seed(432)
+rng.fit = ranger(y ~ ., data=data.frame(X, y),
+                 num.trees = 1000,
+                 respect.unordered.factors='partition',
+                 mtry=3, min.node.size=15, splitrule='gini',
+                 importance='impurity', local.importance=TRUE)
+
+# create data.frame arranging variable-importance
+# pairs by descending order of importance
+vi.df = data.frame(rng.fit$variable.importance)
+names(vi.df) = 'importance'
+vi.df = vi.df %>%
+  mutate(vars = rownames(vi.df)) %>%
+  arrange(desc(importance)) %>%
+  head(10)
+
+# << evidence supporting the results >>
+# << Interestingly, both FOXA1 and GATA3 are key regulators of ER activity
+#    (Liu et  al., 2014), suggesting IDC and ILC may preferentially rely on
+#    different mechanisms to mediate the ER transcriptional program. >>
+# 
+# plot feature importance with a little flair
+g = ggplot(vi.df, aes(x=importance, y=reorder(vars, importance),
+                  fill=importance)) +
+  geom_bar(stat='identity', position='dodge') +
+  labs(y='Feature') +
+  guides(fill=guide_legend(title='Importance',
+                           reverse=TRUE)) +
+  theme_bw() +
+  theme(plot.title=element_text(face='bold', hjust=0.5),
+        legend.position=c(0.7, 0.2),
+        legend.direction='horizontal',
+        legend.background=element_rect(fill='light grey'),
+        legend.key=element_rect(fill='black')) +
+  scale_fill_steps()
+
+grid.arrange(f, g, nrow=2)
+```
+
+```{r}
+# VARIABLES TOP 100 IN AT LEAST 3 MODELS
+top.50.covs = generate.geq.covariates()
+
+pr.st = brca %>% select(PR.Status) %>% filter(PR.Status != 'Missing') %>% mutate(PR.Status = factor(PR.Status))
+pr.rows = which(brca$PR.Status == 'Missing')
+er.st = brca %>% select(ER.Status) %>% filter(ER.Status != 'Missing') %>% mutate(ER.Status = factor(ER.Status))
+er.rows = which(brca$ER.Status == 'Missing')
+h2.st = brca %>% select(HER2.Final.Status) %>% filter(HER2.Final.Status != 'Missing') %>% mutate(HER2.Final.Status = factor(HER2.Final.Status))
+h2.rows = which(brca$HER2.Final.Status == 'Missing')
+hs.ty = brca %>% select(histological.type) %>% mutate(histological.type = factor(ifelse(histological.type == 'infiltrating lobular carcinoma', 'Positive', 'Negative')))
+
+results = rep(NA, 16); i = 2
+results[1] = 'PR.Status'
+results[5] = 'ER.Status'
+results[9] = 'HER2.Final'
+results[13] = 'Hist. Type'
+
+for (response in c(pr.st, er.st, h2.st, hs.ty)) {
+  
+  y = data.frame(y = response)
+  X = brca %>% select(top.50.covs)
+  colmn = 'histological.type'
+  if (length(response) == 546) {X = X[-pr.rows, ]; colmn='PR.Status'}
+  if (length(response) == 549) {X = X[-er.rows, ]; colmn='ER.Status'}
+  if (length(response) == 543) {X = X[-h2.rows, ]; colmn='HER2.Final.Status'}
+  
+  set.seed(1); 
+  foldID = sample(1:3, 705, replace = TRUE)
+  index = order(foldID[which(brca[, colmn] != 'Missing')])
+  
+  rf.fit = train(y ~ ., data=data.frame(X, y), method='rf',
+                  min.node.size=15, splitrule='gini',
+                  num.trees=1000,
+                  trControl=trainControl(method='cv', number=3,
+                                         summaryFunction=twoClassSummary,
+                                         classProbs=TRUE,
+                                         savePredictions=TRUE,
+                                         index=split_index(index)))
+  
+  preds = predict(rf.fit, X, type='prob')[, 2]
+  roc = prediction(preds, y)
+  auc = performance(roc, measure='auc')@y.values[[1]]
+  
+  results[i] = auc; i = i + 1
+  results[i] = mean(rf.fit$results$Sens); i = i + 1
+  results[i] = mean(rf.fit$results$Spec); i = i + 2
+}
+
+rf.fit
+
+results = data.frame(matrix(results, nrow=4, ncol=4, byrow=TRUE))
+names(results) = c('Variable', 'AUC', 'Sensitivity', 'Specificity')
+results = results %>% mutate(AUC = as.double(AUC),
+                   Sensitivity = as.double(Sensitivity),
+                   Specificity = as.double(Specificity))
+
+melt(results, id.vars='Variable') %>%
+  ggplot(aes(x=variable, y= value, fill=variable)) +
+    geom_bar(position='dodge', stat='identity') +
+    facet_grid( ~ Variable) +
+    theme_bw() +
+    scale_x_discrete(guide=guide_axis(n.dodge=2)) +
+    theme(legend.position='none') +
+    labs(x='', y='')
+```

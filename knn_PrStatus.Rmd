@@ -1,0 +1,127 @@
+---
+title: "knn_PrStatus"
+author: "Lucas Nelson (lln2)"
+date: "12/5/2021"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    highlight: tango
+fontsize: 11pt
+---
+
+\noindent\rule{\textwidth}{1pt}
+
+**Utilized libraries for EDA**
+
+```{R warning=FALSE, message=FALSE}
+library(tidyverse)
+library(gt)
+library(ggrepel)
+library(gridExtra)
+library(reshape2)
+```
+
+\noindent\rule{\textwidth}{1pt}
+
+# Data Importing + Data Cleaning
+
+```{R}
+# load in data (tidyverse functionality)
+brca = readr::read_csv('brca_data_w_subtypes.csv',
+                       col_types = cols(histological.type=col_character()))
+
+# remove vital.status variable
+brca = brca %>% select(-vital.status)
+
+# label non-positive, non-negative values as missing data
+brca$PR.Status = ifelse(brca$PR.Status %in% c('Positive', 'Negative'),
+                        brca$PR.Status, 'Missing')
+brca$ER.Status = as.factor(ifelse(brca$ER.Status %in% c('Positive', 'Negative'),
+                        brca$ER.Status, 'Missing'))
+brca$HER2.Final.Status = as.factor(ifelse(brca$HER2.Final.Status
+                                %in% c('Positive', 'Negative'),
+                                brca$HER2.Final.Status, 'Missing'))
+brca$histological.type = as.factor(ifelse(brca$histological.type
+                                %in% c('infiltrating lobular carcinoma',
+                                       'infiltrating ductal carcinoma'),
+                                brca$histological.type, 'Missing'))
+
+# gene expression variables: rna sequencing i.e. gene expression
+gene.expressions = brca %>% select(starts_with('rs'))
+# copy number variations variables: calculated by gistic (-2,-1,0,1,2)
+# 99 REMOVED DUPLICATED COLUMNS
+copy.number.variations = brca %>% select(starts_with('cn'))
+# mutations variables: somatic mutation (yes, no)
+mutations = brca %>% select(starts_with('mu'))
+# protein levels: phospho-protein levels
+protein.levels = brca %>% select(starts_with('pp'))
+
+cn = copy.number.variations[, !duplicated(t(copy.number.variations))]
+mu = mutations[, !duplicated(t(mutations))]
+rs = gene.expressions[, !duplicated(t(gene.expressions))]
+pp = protein.levels[, !duplicated(t(protein.levels))]
+```
+
+```{r message=FALSE, warning=FALSE}
+brca2 = cbind(cn, mu, rs, pp, brca$PR.Status)
+names(brca2)[ncol(brca2)] = 'PR.Status'
+brca2 = brca2 %>% filter(PR.Status != 'Missing') %>% mutate(PR.Status = factor(PR.Status))
+table(brca2$PR.Status)
+
+X = brca2[, -ncol(brca2)]
+y = brca2[, 'PR.Status']
+
+### USING RANGER LIBRARY
+library(ranger)
+set.seed(432)
+rf.rcvfit = train(y ~ ., method='ranger', data=data.frame(X, y),
+                  num.trees=300, respect.unordered.factors = "partition",
+                  trControl=trainControl(method='repeatedcv',
+                                         number=10, repeats=5),
+                  tuneGrid=expand.grid(mtry=c(7,15),
+                                       min.node.size=c(1,5,10,15),
+                                       splitrule='gini'))
+
+rf.rcvfit
+
+rng.fit = ranger(y ~ ., data=data.frame(X, y),
+                 num.trees = 1000,
+                 respect.unordered.factors='partition',
+                 mtry=15, min.node.size=15, splitrule='gini',
+                 importance='impurity', local.importance=TRUE)
+
+# create data.frame arranging variable-importance
+# pairs by descending order of importance
+vi.df = data.frame(rng.fit$variable.importance)
+names(vi.df) = 'importance'
+vi.df = vi.df %>%
+  mutate(vars = rownames(vi.df)) %>%
+  arrange(desc(importance)) %>%
+  head(50)
+
+# << evidence supporting the results >>
+# << Interestingly, both FOXA1 and GATA3 are key regulators of ER activity
+#    (Liu et  al., 2014), suggesting IDC and ILC may preferentially rely on
+#    different mechanisms to mediate the ER transcriptional program. >>
+# 
+# plot feature importance with a little flair
+ggplot(vi.df, aes(x=importance, y=reorder(vars, importance),
+                  fill=importance)) +
+  geom_bar(stat='identity', position='dodge') +
+  labs(title='Feature Importance of Random Forest',
+       y='Feature') +
+  guides(fill=guide_legend(title='Importance',
+                           reverse=TRUE)) +
+  theme_bw() +
+  theme(plot.title=element_text(face='bold', hjust=0.5),
+        legend.position=c(0.8, 0.25),
+        legend.background=element_rect(fill='light grey'),
+        legend.key=element_rect(fill='black')) +
+  scale_fill_steps()
+
+# isolate tuning parameters where model's classification accuracy is maximized
+rf.rcvfit$results[which.max(rf.rcvfit$results$Accuracy), ]
+```
